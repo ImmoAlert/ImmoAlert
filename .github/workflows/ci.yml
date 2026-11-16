@@ -107,7 +107,7 @@ jobs:
           docker run --rm -v "$PWD/deploy/plesk:/work:ro" php:8.3-cli-alpine php -l /work/httpdocs/api/index.php
           docker run --rm -v "$PWD/deploy/plesk:/work:ro" php:8.3-cli-alpine php -l /work/private/immoalert.example.php
       - name: Keep the tested upload package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: immoalert-plesk
           path: |
