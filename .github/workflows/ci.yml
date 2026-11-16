@@ -15,7 +15,7 @@ jobs:
     name: Public snapshot and secrets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -56,7 +56,7 @@ jobs:
       AI_SCAM_ENABLED: "false"
       USE_SELENIUM_FALLBACK: "false"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [tests, frontend]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build image
         run: docker build -t tgbbot:ci .
       - name: Check application and database without network access
@@ -87,7 +87,7 @@ jobs:
     name: Website and Plesk upload
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -124,7 +124,7 @@ jobs:
       DATABASE_URL: "sqlite://"
       ENABLE_GEOCODING: "false"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
