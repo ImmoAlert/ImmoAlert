@@ -59,8 +59,19 @@ def queue_events(now=None):
             for user_id in recipients:
                 user=users.get(user_id)
                 if not user or not user.active or user_id in prefs and not prefs[user_id].price_alerts:continue
+                threshold=prefs[user_id].price_drop_min_percent if user_id in prefs else 0
+                if threshold and (history.previous_price-history.price)*100<threshold*history.previous_price:continue
                 delay=0 if user.is_premium else settings.premium_free_delay_seconds
                 _queue(session,user,listing,'price_drop',f'price:{history.id}',{'title':listing.title,'source':publication.source,'previous_price':history.previous_price,'price':history.price,'observed_at':iso(history.observed_at)},now,now+timedelta(seconds=delay))
+        for event in list(session.scalars(select(m.ListingEvent).where(m.ListingEvent.announced_at.is_(None),m.ListingEvent.kind=='back_on_market').order_by(m.ListingEvent.id).limit(100))):
+            event.announced_at=now
+            listing=session.get(m.Listing,event.listing_id)
+            if not listing or listing.removed_at is not None or listing.inventory_status=='invalid':continue
+            publication=session.get(m.ListingPublication,event.publication_id) if event.publication_id else None
+            for user_id in favorites.get(listing.id,set()):
+                user=users.get(user_id)
+                if not user or not user.active or user_id in prefs and not prefs[user_id].back_on_market:continue
+                _queue(session,user,listing,'back_on_market',f'market:{event.id}',{'title':listing.title,'source':publication.source if publication else listing.source,'observed_at':iso(event.created_at)},now)
         for note in session.scalars(select(m.MemberListingNote).where(m.MemberListingNote.reminder_at<=now,m.MemberListingNote.reminder_sent_at.is_(None))):
             listing=session.get(m.Listing,note.listing_id);user=users.get(note.user_id)
             if not listing or listing.removed_at is not None or not user or note.stage!='visit' or not note.visit_at or note.visit_at<=now:continue
@@ -135,6 +146,7 @@ def _valid_notice(notice,prefs,now):
     listing=repo.get_listing_by_id(notice.listing_id)
     valid=listing is not None and listing.removed_at is None and listing.inventory_status!='invalid'
     if notice.kind=='price_drop':valid=valid and prefs['price_alerts']
+    if notice.kind=='back_on_market':valid=valid and prefs['back_on_market']
     if notice.kind=='visit_reminder':
         with repo.session_scope() as session:
             note=session.get(m.MemberListingNote,(notice.user_id,notice.listing_id))
@@ -177,10 +189,57 @@ def _failed(user,entries,exc,now):
     log.warning('Member notifications deferred for user %s (%s)',user.id,type(exc).__name__)
 
 
+def weekly_stats(user_id,now):
+    since=now-timedelta(days=7)
+    with repo.session_scope() as session:
+        alerts=session.scalar(select(func.count()).select_from(m.SentAlert).where(m.SentAlert.user_id==user_id,m.SentAlert.sent_at>=since))
+        counts=dict(session.execute(select(m.MemberNotification.kind,func.count()).where(m.MemberNotification.user_id==user_id,m.MemberNotification.created_at>=since).group_by(m.MemberNotification.kind)).all())
+        visits=session.scalar(select(func.count()).select_from(m.MemberListingNote).where(m.MemberListingNote.user_id==user_id,m.MemberListingNote.stage=='visit',m.MemberListingNote.visit_at>now,m.MemberListingNote.visit_at<=now+timedelta(days=7)))
+    return {'matches':alerts or 0,'price_drops':counts.get('price_drop',0),'back_on_market':counts.get('back_on_market',0),'visits':visits or 0}
+
+
+def weekly_text(stats):
+    lines=[f"{stats['matches']} annonce(s) correspondant à vos recherches cette semaine.",f"{stats['price_drops']} baisse(s) de loyer sur vos favoris et recherches.",f"{stats['back_on_market']} bien(s) de retour sur le marché."]
+    lines.append(f"{stats['visits']} visite(s) prévue(s) dans les 7 prochains jours." if stats['visits'] else 'Aucune visite prévue dans les 7 prochains jours.')
+    return lines
+
+
+async def _weekly_all(bot,now):
+    """Weekly digest on every enabled channel, once per local ISO week."""
+    from services import extra_channels
+    with repo.session_scope() as session:
+        disabled=set(session.scalars(select(m.WebAccount.user_id).where(m.WebAccount.enabled==False)))
+        user_ids=[row.user_id for row in session.scalars(select(m.NotificationPreference).where(m.NotificationPreference.weekly_digest==True)) if row.user_id not in disabled]
+    for user_id in user_ids:
+        prefs=await asyncio.to_thread(preferences.get_preferences,user_id)
+        if not preferences.weekly_due(prefs,now):continue
+        user=await asyncio.to_thread(repo.get_user_by_id,user_id)
+        if not user or not user.active:continue
+        lines=weekly_text(await asyncio.to_thread(weekly_stats,user_id,now))
+        delivered=False;attempted=False
+        if user.telegram_id:
+            attempted=True
+            try:
+                await bot.send_message(user.telegram_id,'<b>Votre semaine immobilière</b>\n'+'\n'.join(escape(line) for line in lines),disable_web_page_preview=True)
+                delivered=True
+            except Exception as exc:
+                await asyncio.to_thread(_failed,user,[],exc,now)
+        if await asyncio.to_thread(extra_channels._wants_extra,prefs,user_id):
+            attempted=True
+            delivered=await extra_channels.deliver(user_id,prefs,'Votre semaine immobilière','\n'.join(lines)) or delivered
+        if delivered or not attempted:
+            with repo.session_scope() as session:
+                row=session.get(m.NotificationPreference,user_id)
+                if row:row.last_weekly_at=now
+
+
 async def dispatch_member_notifications(bot,*,now=None):
     now=now or datetime.utcnow()
     async with _dispatch_lock:
         await asyncio.to_thread(queue_events,now)
+        from services import extra_channels
+        await extra_channels.dispatch_extra_channels(now)
+        await _weekly_all(bot,now)
         with repo.session_scope() as session:
             disabled=set(session.scalars(select(m.WebAccount.user_id).where(m.WebAccount.enabled==False)))
             users=[user for user in session.scalars(select(m.User).where(m.User.active==True,m.User.telegram_id.is_not(None))) if user.id not in disabled]
@@ -197,6 +256,7 @@ async def dispatch_member_notifications(bot,*,now=None):
                 if notice.kind=='visit_reminder':
                     date=preferences.local_time(prefs,datetime.fromisoformat(json.loads(notice.payload)['visit_at'].replace('Z','+00:00')).replace(tzinfo=None)).strftime('%d/%m à %H:%M')
                     message=f'<b>Rappel de visite</b>\n{_line(listing)}\nVisite le {date} ({escape(prefs["timezone"])}).'
+                elif notice.kind=='back_on_market':message='<b>De retour sur le marché</b>\n'+_line(listing)
                 else:message='<b>Baisse de loyer</b>\n'+_line(listing,notice)
                 entry=('notice',notice,listing,None)
                 try:
@@ -244,6 +304,12 @@ async def run_member_monitor(bot):
             await dispatch_member_notifications(bot)
             await asyncio.to_thread(performance.flush)
             if iteration%120==0:await asyncio.to_thread(performance.prune)
+            if iteration%4==0:
+                from services.source_health import check_sources
+                await check_sources(bot)
+            if iteration%2880==0:
+                from services.backup import run_backup
+                await asyncio.to_thread(run_backup)
         except asyncio.CancelledError:raise
         except Exception:
             log.exception('Member notification or freshness monitor failed')

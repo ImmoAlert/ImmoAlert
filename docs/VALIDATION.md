@@ -23,6 +23,7 @@ Installer Playwright et Chromium pour les contrôles visuels ; `IMD_PLAYWRIGHT` 
 
 ```bash
 node scripts/check_member_ui.mjs
+node scripts/check_public_ui.mjs   # navigation publique, inscription, pages compte
 node scripts/check_flashproxy_plan_ui.mjs
 node scripts/check_comparison_csv.mjs
 python3 scripts/check_member_gateway.py

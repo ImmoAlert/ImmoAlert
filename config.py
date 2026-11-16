@@ -224,6 +224,27 @@ class Settings:
     web_proxy_origin: str | None = field(default_factory=lambda: env_optional_str("WEB_PROXY_ORIGIN"))
     web_proxy_secret: str | None = field(default_factory=lambda: env_optional_str("WEB_PROXY_SECRET"), repr=False)
 
+    web_public_registration: bool = field(default_factory=lambda: env_bool("WEB_PUBLIC_REGISTRATION", True))
+    web_session_days: int = field(default_factory=lambda: env_int("WEB_SESSION_DAYS", 30, min_value=1, max_value=90))
+    web_session_idle_days: int = field(default_factory=lambda: env_int("WEB_SESSION_IDLE_DAYS", 14, min_value=1, max_value=90))
+    web_2fa_issuer: str = field(default_factory=lambda: env_str("WEB_2FA_ISSUER", "ImmoAlert"))
+
+    commute_routing_url: str | None = field(default_factory=lambda: env_optional_str("COMMUTE_ROUTING_URL"))
+
+    smtp_host: str | None = field(default_factory=lambda: env_optional_str("SMTP_HOST"))
+    smtp_port: int = field(default_factory=lambda: env_int("SMTP_PORT", 587, min_value=1, max_value=65535))
+    smtp_user: str | None = field(default_factory=lambda: env_optional_str("SMTP_USER"))
+    smtp_password: str | None = field(default_factory=lambda: env_optional_str("SMTP_PASSWORD"), repr=False)
+    smtp_sender: str | None = field(default_factory=lambda: env_optional_str("SMTP_SENDER"))
+
+    vapid_public_key: str | None = field(default_factory=lambda: env_optional_str("VAPID_PUBLIC_KEY"))
+    vapid_private_key: str | None = field(default_factory=lambda: env_optional_str("VAPID_PRIVATE_KEY"), repr=False)
+    vapid_subject: str = field(default_factory=lambda: env_str("VAPID_SUBJECT", "mailto:admin@example.invalid"))
+
+    backup_dir: str = field(default_factory=lambda: env_str("BACKUP_DIR", "storage/backups"))
+    backup_retention: int = field(default_factory=lambda: env_int("BACKUP_RETENTION", 7, min_value=1, max_value=365))
+    source_alert_failures: int = field(default_factory=lambda: env_int("SOURCE_ALERT_FAILURES", 3, min_value=1, max_value=50))
+
     ai_scam_enabled: bool = field(default_factory=lambda: env_bool("AI_SCAM_ENABLED", False))
     ai_scam_endpoint: str | None = field(default_factory=lambda: env_optional_str("AI_SCAM_ENDPOINT"))
     ai_scam_api_key: str | None = field(default_factory=lambda: env_optional_str("AI_SCAM_API_KEY"))

@@ -1,9 +1,12 @@
 import React from "react";
 import {createRoot} from "react-dom/client";
 import Dashboard from "./dashboard";
+import SharedView from "./shared-view";
 import {LazyMotion,domMax,MotionConfig} from "motion/react";
 import "./design.css";
 import "./listing-motion.css";
 import "./moderation.css";
 import './member-features.css';
-createRoot(document.getElementById("root")!).render(<React.StrictMode><MotionConfig reducedMotion="user"><LazyMotion features={domMax} strict><Dashboard/></LazyMotion></MotionConfig></React.StrictMode>);
+if("serviceWorker" in navigator&&window.isSecureContext)void navigator.serviceWorker.register("/sw.js").catch(()=>{});
+const shareToken=new URLSearchParams(window.location.search).get("share");
+createRoot(document.getElementById("root")!).render(<React.StrictMode><MotionConfig reducedMotion="user"><LazyMotion features={domMax} strict>{shareToken?<SharedView token={shareToken}/>:<Dashboard/>}</LazyMotion></MotionConfig></React.StrictMode>);

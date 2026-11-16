@@ -17,3 +17,4 @@ selenium==4.25.0
 webdriver-manager==4.0.2
 scrapling[fetchers]==0.5
 cryptography==50.0.2
+pywebpush==2.5.0

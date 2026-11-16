@@ -33,7 +33,7 @@ class LoginBootstrapTests(unittest.IsolatedAsyncioTestCase):
     async def test_anonymous_bootstrap_returns_json_instead_of_static_404(self):
         _, data = await self.bootstrap()
         self.assertIsNone(data['account'])
-        self.assertIsNone(data['snapshot'])
+        self.assertTrue(data['public']);self.assertEqual(data['snapshot']['listings'],[])
         self.assertEqual(data['bot_username'], 'immoalert_test_bot')
 
     async def test_password_session_is_immediately_visible_to_bootstrap(self):

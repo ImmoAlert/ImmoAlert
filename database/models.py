@@ -65,6 +65,7 @@ class WebSession(Base):
     pair_token: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, unique=True)
     pair_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     pair_command_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
 class WebCommand(Base):
@@ -103,6 +104,11 @@ class WebAccount(Base):
     created_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    totp_secret: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    recovery_hashes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    totp_last_step: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    self_registered: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class WebRequest(Base):
@@ -254,6 +260,13 @@ class NotificationPreference(Base):
     summary_time: Mapped[str] = mapped_column(String(5), default="08:00")
     price_alerts: Mapped[bool] = mapped_column(Boolean, default=True)
     last_summary_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    price_drop_min_percent: Mapped[int] = mapped_column(Integer, default=0)
+    back_on_market: Mapped[bool] = mapped_column(Boolean, default=True)
+    weekly_digest: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_weekly_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String(254), nullable=True)
+    email_alerts: Mapped[bool] = mapped_column(Boolean, default=False)
+    push_alerts: Mapped[bool] = mapped_column(Boolean, default=True)
     retry_after: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
@@ -269,6 +282,7 @@ class MemberNotification(Base):
     not_before: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     telegram_status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     read_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    extra_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     __table_args__ = (UniqueConstraint("user_id", "event_key", name="uq_member_notification_event"),)
 
 
@@ -349,3 +363,46 @@ class SourceRun(Base):
     disabled_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     diagnostics_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class ListingEvent(Base):
+    """Marketplace events that are not price changes, such as a return to market."""
+    __tablename__ = "listing_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    listing_id: Mapped[int] = mapped_column(Integer, ForeignKey("listings.id", ondelete="CASCADE"), index=True)
+    publication_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    kind: Mapped[str] = mapped_column(String(24))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    announced_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    actor: Mapped[str] = mapped_column(String(80))
+    event: Mapped[str] = mapped_column(String(40), index=True)
+    detail: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class SharedLink(Base):
+    __tablename__ = "shared_links"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(80), default="")
+    listing_ids: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class PushSubscription(Base):
+    __tablename__ = "push_subscriptions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    endpoint: Mapped[str] = mapped_column(String(600), unique=True)
+    p256dh: Mapped[str] = mapped_column(String(200))
+    auth: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

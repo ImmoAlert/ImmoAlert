@@ -23,8 +23,14 @@ def find_session(token: str) -> dict | None:
         return None
     with repo.session_scope() as session:
         row = session.get(m.WebSession, key)
-        if not row or row.expires_at <= datetime.utcnow():
+        now = datetime.utcnow()
+        if not row or row.expires_at <= now:
             return None
+        if row.last_seen_at and row.web_account_id and now-row.last_seen_at > timedelta(days=settings.web_session_idle_days):
+            session.delete(row)
+            return None
+        if row.web_account_id and (not row.last_seen_at or now-row.last_seen_at > timedelta(minutes=10)):
+            row.last_seen_at = now
         from services.web_auth import identity
         return identity(session,row)
 

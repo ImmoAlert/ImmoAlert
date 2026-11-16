@@ -14,7 +14,7 @@ export function useInventory(userId:number|undefined,criteria:string,enabled:boo
  const expected=`${userId||0}:${criteria}`;
  if(key.current!==expected){key.current=expected;version.current++}
  const fetchPage=useCallback(async(requestedPage:number)=>{
-  if(!userId||!enabled||document.hidden)return;
+  if(userId===undefined||!enabled||document.hidden)return;
   if(active.current){await active.current.promise;if(active.current)return}
   const ownVersion=version.current,controller=new AbortController();
   setLoading(true);
@@ -31,11 +31,11 @@ export function useInventory(userId:number|undefined,criteria:string,enabled:boo
  },[userId,enabled,criteria]);
  useEffect(()=>{setPage(1)},[userId,criteria]);
  useEffect(()=>{
-  if(!userId){setData(empty);return}
+  if(userId===undefined){setData(empty);return}
   if(!enabled)return;
   let stop:(()=>void)|undefined;
   const timer=setTimeout(()=>{stop=startVisiblePolling(()=>fetchPage(page),8000,()=>active.current?.controller.abort())},new URLSearchParams(criteria).get('q')?180:0);
   return()=>{clearTimeout(timer);stop?.();active.current?.controller.abort()};
  },[userId,enabled,criteria,page,fetchPage]);
- return {...(owner===userId?data:empty),loading:loading||!!userId&&enabled&&loadedKey!==expected,error,currentPage:page,setPage,refresh:()=>fetchPage(page)};
+ return {...(owner===userId?data:empty),loading:loading||userId!==undefined&&enabled&&loadedKey!==expected,error,currentPage:page,setPage,refresh:()=>fetchPage(page)};
 }

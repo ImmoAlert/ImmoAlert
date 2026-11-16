@@ -19,7 +19,7 @@ from sqlalchemy import text
 from config import settings
 from database import repo, web_repo
 from services import site_sync as service
-from services import web_auth, admin_monitor
+from services import web_auth, admin_monitor, audit, two_factor
 
 log = logging.getLogger(__name__)
 COOKIE = "immo_session"
@@ -162,7 +162,7 @@ async def boundary(request, handler):
             log.warning("Could not persist web request metadata")
     result.headers.update({"X-Content-Type-Options":"nosniff", "X-Frame-Options":"DENY", "Referrer-Policy":"no-referrer",
         "Content-Security-Policy":"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; font-src 'self'; connect-src 'self'; frame-src https://www.openstreetmap.org; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"})
-    result.headers["Cache-Control"] = "private, no-store" if request.path.startswith("/api/") or request.path in {"/","/login"} else "public, max-age=3600"
+    result.headers["Cache-Control"] = "private, no-store" if request.path.startswith("/api/") or request.path in {"/","/login"} else "no-cache" if request.path in {"/sw.js","/manifest.webmanifest"} else "public, max-age=3600"
     if request.path.startswith('/api/listings/') and request.path.rsplit('/',1)[-1].isdigit():
         from services import performance
         performance.elapsed('detail_api',started)
@@ -179,13 +179,21 @@ async def current_identity(request, *, complete=True):
     return identity,fresh
 
 
+def public_snapshot(snapshot):
+    """Counts only: provider status, errors and member data stay private."""
+    return {"total_listings":snapshot.get("total_listings",0),"new_today":snapshot.get("new_today",0),
+        "sources":[{"name":item["name"],"enabled":item["enabled"],"total":item["total"]} for item in snapshot.get("sources",[])],
+        "listings":[],"generated_at":snapshot.get("generated_at")}
+
+
 async def state(request):
     site = request.app[STATE]
     compact=request.path=='/api/bootstrap'
     identity, fresh = await current_identity(request)
     if not identity or not identity.get("user_id"):
         commands = await asyncio.to_thread(web_repo.commands, identity, set(service._scan_tasks)) if identity else []
-        return response({"user":None,"account":None,"snapshot":None,"bot_username":site.bot_username,"commands":commands,"search_jobs":[],"synced_at":None})
+        snapshot = public_snapshot(await site.snapshot(True))
+        return response({"user":None,"account":None,"snapshot":snapshot,"public":True,"registration":settings.web_public_registration,"bot_username":site.bot_username,"commands":commands,"search_jobs":[],"synced_at":int(time.time()*1000)})
     from services.search_jobs import user_jobs
     search_jobs=await asyncio.to_thread(user_jobs,identity["user_id"])
     version=tuple((job["id"],job["status"],job["listings_seen"],job["matches_count"],job["finished_at"]) for job in search_jobs)
@@ -301,15 +309,90 @@ async def login(request):
         return response({"error":"Requête invalide."},400)
     key=hashlib.sha256(data["login"].strip().lower().encode()).hexdigest()
     site.check_rate("password-name:"+key,10,600)
-    result=await asyncio.to_thread(web_auth.authenticate,data["login"],data["password"],request.cookies.get(COOKIE,""))
+    otp=data.get("otp")
+    if otp is not None and not isinstance(otp,str):
+        return response({"error":"Requête invalide."},400)
+    try:
+        result=await asyncio.to_thread(web_auth.authenticate,data["login"],data["password"],request.cookies.get(COOKIE,""),otp)
+    except web_auth.OtpRequired:
+        return response({"error":"Saisissez le code de votre application d’authentification.","otp_required":True},401)
     if result is None:
-        return response({"error":"Identifiant ou mot de passe incorrect, ou accès désactivé."},401)
+        await asyncio.to_thread(audit.record,"login_failed",actor=data["login"].strip().lower()[:40],detail="Identifiant, mot de passe ou code incorrect.")
+        return response({"error":"Identifiant, mot de passe ou code incorrect, ou accès désactivé."},401)
     token,identity=result
     request["identity"]=identity
+    await asyncio.to_thread(audit.record,"login",user_id=identity["user_id"],actor=identity["login"] or "")
     site.account_cache.clear()
     result=response({"message":"Connexion établie."})
     cookie(result,token,site,request)
     return result
+
+
+async def register(request):
+    site=request.app[STATE]
+    request["audit_action"]="register"
+    if not settings.web_public_registration:
+        return response({"error":"Les inscriptions sont fermées."},403)
+    site.check_rate("register-ip:"+request.get("client_ip",request.remote or "unknown"),5,3600)
+    try:
+        data=await request.json()
+        if not isinstance(data,dict) or not isinstance(data.get("login"),str) or not isinstance(data.get("password"),str):
+            raise ValueError("Requête invalide.")
+        token,identity=await asyncio.to_thread(web_auth.register_account,data["login"],data["password"])
+    except (ValueError,TypeError) as exc:
+        return response({"error":str(exc) or "Requête invalide."},400)
+    except PermissionError as exc:
+        return response({"error":str(exc)},403)
+    request["identity"]=identity
+    await asyncio.to_thread(audit.record,"register",user_id=identity["user_id"],actor=identity["login"] or "")
+    site.account_cache.clear();site.global_at=0;site.admin_at=0
+    result=response({"message":"Compte créé. Bienvenue !"},201)
+    cookie(result,token,site,request)
+    return result
+
+
+async def account_security(request):
+    """Password, second factor and profile data of the signed-in member."""
+    site=request.app[STATE]
+    identity,_=await current_identity(request,complete=False)
+    if not identity or not identity.get("user_id"):
+        return response({"error":"Connectez-vous au site."},401)
+    uid=identity["user_id"]
+    site.check_rate("security:"+str(uid),20,600)
+    operation=request.match_info["operation"]
+    try:
+        data=await request.json() if request.can_read_body else {}
+        if not isinstance(data,dict):
+            raise ValueError("Requête invalide.")
+        if operation=="password":
+            token=request.cookies.get(COOKIE,"")
+            login=await asyncio.to_thread(web_auth.change_password,uid,data.get("current"),data.get("new"),web_repo.session_id(token))
+            await asyncio.to_thread(audit.record,"password_changed",user_id=uid,actor=login)
+            return response({"message":"Mot de passe modifié. Vos autres appareils ont été déconnectés."})
+        if operation=="2fa-start":
+            return response(await asyncio.to_thread(two_factor.start_setup,uid))
+        if operation=="2fa-confirm":
+            result=await asyncio.to_thread(two_factor.confirm_setup,uid,str(data.get("code","")))
+            await asyncio.to_thread(audit.record,"2fa_enabled",user_id=uid,actor=identity["login"] or "")
+            return response({**result,"message":"Authentification à deux facteurs activée. Conservez vos codes de secours."})
+        if operation=="2fa-disable":
+            await asyncio.to_thread(two_factor.disable,uid,str(data.get("code","")))
+            await asyncio.to_thread(audit.record,"2fa_disabled",user_id=uid,actor=identity["login"] or "")
+            return response({"message":"Authentification à deux facteurs désactivée."})
+    except (ValueError,TypeError) as exc:
+        return response({"error":str(exc) or "Requête invalide."},400)
+    except RuntimeError as exc:
+        return response({"error":str(exc)},500)
+    return response({"error":"Opération inconnue."},404)
+
+
+async def admin_audit(request):
+    await require_admin(request)
+    try:
+        limit=int(request.query.get("limit","200"))
+    except ValueError:
+        return response({"error":"Limite invalide."},400)
+    return response({"events":await asyncio.to_thread(audit.recent,limit,request.query.get("event") or None)})
 
 
 async def require_admin(request):
@@ -515,9 +598,8 @@ async def listing_detail(request):
     from services.listing_details import get_listing_details
     site=request.app[STATE]
     identity,_=await current_identity(request,complete=False)
-    if not identity or not identity.get("user_id"):
-        return response({"error":"Connectez-vous au site."},401)
-    site.check_rate("detail:"+str(identity["user_id"]),40,60)
+    member=bool(identity and identity.get("user_id"))
+    site.check_rate("detail:"+(str(identity["user_id"]) if member else "ip:"+request.get("client_ip",request.remote or "unknown")),40,60)
     try:
         identifier=int(request.match_info["identifier"])
         if not 0<identifier<=1000000000:
@@ -542,7 +624,7 @@ async def listing_detail(request):
     if not row or row.removed_at is not None:
         return response({"error":"Cette annonce a été supprimée du site."},404)
     from services.member_api import detail_payload
-    result=await asyncio.to_thread(detail_payload,row,identity['user_id'],enriching)
+    result=await asyncio.to_thread(detail_payload,row,identity['user_id'] if member else None,enriching)
     return response(result)
 
 
@@ -576,6 +658,9 @@ def create_app(bot, *, directory: Path, origin: str, bot_username: str):
     app.router.add_post("/api/action", action)
     app.router.add_post("/api/logout", logout)
     app.router.add_post("/api/login", login)
+    app.router.add_post("/api/register", register)
+    app.router.add_post("/api/account/{operation}", account_security)
+    app.router.add_get("/api/admin/audit", admin_audit)
     app.router.add_get("/api/admin/live",admin_live)
     app.router.add_get("/api/admin/providers",admin_providers)
     app.router.add_get("/api/admin/reports",admin_listing_reports)

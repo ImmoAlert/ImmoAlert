@@ -19,3 +19,11 @@ L’ancienne configuration d’un seul plan FlashProxy continue de fonctionner. 
 ## 2.0.0
 
 Site React, comptes administrés, connexion par mot de passe et liaison Telegram facultative, console de supervision et édition Plesk avec passerelle PHP signée.
+
+## 2.2.0
+
+- Site public : consultation des annonces sans compte ; inscription libre requise pour favoris, recherches, suivis et alertes.
+- Sécurité : mots de passe contrôlés, 2FA TOTP avec codes de secours, expiration par inactivité, journal d'audit.
+- Alertes : seuil de baisse, retour sur le marché, résumé hebdomadaire, e-mail et Web Push.
+- Export .ics des visites, trajets estimés, liens de comparaison en lecture seule, score de comparaison.
+- Alerte administrateur sur sources en panne, sauvegarde quotidienne de la base, PWA.

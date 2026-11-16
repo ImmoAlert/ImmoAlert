@@ -6,13 +6,15 @@ import re
 from zoneinfo import ZoneInfo,ZoneInfoNotFoundError
 from database import models as m,repo
 
-DEFAULTS={"timezone":"Europe/Paris","quiet_start":None,"quiet_end":None,"daily_summary":False,"summary_time":"08:00","price_alerts":True}
+DEFAULTS={"timezone":"Europe/Paris","quiet_start":None,"quiet_end":None,"daily_summary":False,"summary_time":"08:00","price_alerts":True,
+    "price_drop_min_percent":0,"back_on_market":True,"weekly_digest":False,"email":None,"email_alerts":False,"push_alerts":True}
+_EMAIL=re.compile(r"[^@\s]{1,64}@[^@\s]{1,189}\.[^@\s.]{2,}\Z")
 
 
 def get_preferences(user_id):
     with repo.session_scope() as session:
         row=session.get(m.NotificationPreference,user_id)
-        return {**DEFAULTS,**({key:getattr(row,key) for key in DEFAULTS} if row else {}),"last_summary_at":row.last_summary_at if row else None,"retry_after":row.retry_after if row else None}
+        return {**DEFAULTS,**({key:getattr(row,key) for key in DEFAULTS} if row else {}),"last_summary_at":row.last_summary_at if row else None,"last_weekly_at":row.last_weekly_at if row else None,"retry_after":row.retry_after if row else None}
 
 
 def public_preferences(user_id):
@@ -33,8 +35,15 @@ def save_preferences(user_id,payload):
         if not isinstance(value,str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d',value):raise ValueError("Indiquez une heure valide au format HH:MM.")
     if bool(values['quiet_start'])!=bool(values['quiet_end']) or (values['quiet_start'] and values['quiet_start']==values['quiet_end']):
         raise ValueError("Indiquez le début et la fin de la plage silencieuse, à des heures différentes.")
-    for field in ('daily_summary','price_alerts'):
+    for field in ('daily_summary','price_alerts','back_on_market','weekly_digest','email_alerts','push_alerts'):
         if type(values[field]) is not bool:raise ValueError("Une valeur activée/désactivée est requise.")
+    if type(values['price_drop_min_percent']) is not int or not 0<=values['price_drop_min_percent']<=90:
+        raise ValueError("Le seuil de baisse doit être un pourcentage entier entre 0 et 90.")
+    if values['email'] in ('',None):values['email']=None
+    elif not isinstance(values['email'],str) or len(values['email'])>254 or not _EMAIL.fullmatch(values['email'].strip()):
+        raise ValueError("Adresse e-mail invalide.")
+    else:values['email']=values['email'].strip()
+    if values['email_alerts'] and not values['email']:raise ValueError("Renseignez une adresse e-mail pour recevoir les alertes par e-mail.")
     with repo.session_scope() as session:
         user=session.get(m.User,user_id)
         if not user:raise ValueError("Compte introuvable.")
@@ -78,3 +87,13 @@ def summary_due(prefs,now):
 def hold_ordinary(user_id,now=None):
     prefs=get_preferences(user_id)
     return prefs['daily_summary'] or is_quiet(prefs,now)
+
+
+def weekly_due(prefs,now):
+    """One digest per local ISO week, on Monday at the member's summary time."""
+    if not prefs.get('weekly_digest') or is_quiet(prefs,now):return False
+    if prefs.get('retry_after') and prefs['retry_after']>now:return False
+    local=local_time(prefs,now)
+    if local.weekday()!=0 or local.strftime('%H:%M')<prefs['summary_time']:return False
+    last=prefs.get('last_weekly_at')
+    return not last or local_time(prefs,last).isocalendar()[:2]!=local.isocalendar()[:2]

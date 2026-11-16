@@ -28,6 +28,8 @@ def record_observation(session, listing, source, external_id, price, seen, statu
     if seen and publication.last_seen_at and seen<publication.last_seen_at:
         return
     if status=="active" and seen and listing.removed_at is None:
+        if publication.availability_status=="unavailable":
+            session.add(m.ListingEvent(listing_id=listing.id,publication_id=publication.id,kind="back_on_market",created_at=seen))
         publication.availability_status="available"
         publication.availability_checked_at=seen
         publication.availability_detail="Annonce observée sur le portail."
@@ -153,6 +155,8 @@ def record_availability(publication_id,outcome,*,now=None):
         pub=session.get(m.ListingPublication,publication_id)
         if not pub:return
         if outcome=="available":
+            if pub.availability_status=="unavailable":
+                session.add(m.ListingEvent(listing_id=pub.listing_id,publication_id=pub.id,kind="back_on_market",created_at=now))
             pub.availability_status="available";pub.absence_count=0;pub.absence_first_at=None
             pub.availability_detail="Annonce observée sur le portail."
         elif outcome=="absent":
@@ -189,7 +193,7 @@ def merge_member_profile(session,source_id,target_id):
     if source:
         target=session.get(m.NotificationPreference,target_id)
         if target:
-            for key in ('timezone','quiet_start','quiet_end','daily_summary','summary_time','price_alerts'):setattr(target,key,getattr(source,key))
+            for key in ('timezone','quiet_start','quiet_end','daily_summary','summary_time','price_alerts','price_drop_min_percent','back_on_market','weekly_digest','email','email_alerts','push_alerts'):setattr(target,key,getattr(source,key))
             session.delete(source)
         else:source.user_id=target_id
     for notice in list(session.scalars(select(m.MemberNotification).where(m.MemberNotification.user_id==source_id))):

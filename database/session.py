@@ -121,6 +121,12 @@ def _run_light_migrations() -> None:
         _add_column_if_missing("web_sessions", "user_id", "INTEGER")
         _add_column_if_missing("web_sessions", "web_account_id", "INTEGER")
         _add_column_if_missing("web_commands", "profile_user_id", "INTEGER")
+        _add_column_if_missing("web_sessions", "last_seen_at", datetime_type)
+        for column,definition in {"totp_secret":"TEXT","totp_enabled":"BOOLEAN NOT NULL DEFAULT FALSE","recovery_hashes":"TEXT","totp_last_step":"INTEGER","self_registered":"BOOLEAN NOT NULL DEFAULT FALSE"}.items():
+            _add_column_if_missing("web_accounts",column,definition)
+        for column,definition in {"price_drop_min_percent":"INTEGER NOT NULL DEFAULT 0","back_on_market":"BOOLEAN NOT NULL DEFAULT TRUE","weekly_digest":"BOOLEAN NOT NULL DEFAULT FALSE","last_weekly_at":datetime_type,"email":"VARCHAR(254)","email_alerts":"BOOLEAN NOT NULL DEFAULT FALSE","push_alerts":"BOOLEAN NOT NULL DEFAULT TRUE"}.items():
+            _add_column_if_missing("notification_preferences",column,definition)
+        _add_column_if_missing("member_notifications", "extra_sent_at", datetime_type)
         for column,definition in {
             "price":"INTEGER", "availability_status":"VARCHAR(24)",
             "availability_checked_at":datetime_type, "availability_detail":"VARCHAR(200)",

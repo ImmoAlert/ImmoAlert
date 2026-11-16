@@ -27,7 +27,7 @@ class MemberApiTests(unittest.IsolatedAsyncioTestCase):
     login=base.SelfHostedWebTests.login
 
     async def test_member_routes_require_authentication(self):
-        for path in [f'/api/listings/{self.item.id}/area','/api/inventory','/api/preferences','/api/notifications','/api/comparison?ids=1,2',f'/api/listings/{self.item.id}/note',f'/api/listings/{self.item.id}/prices',f'/api/listings/{self.item.id}/updates',f'/api/listings/{self.item.id}/events']:
+        for path in ['/api/preferences','/api/notifications','/api/comparison?ids=1,2',f'/api/listings/{self.item.id}/note','/api/shares','/api/calendar.ics','/api/push']:
             with self.subTest(path=path):self.assertEqual((await self.client.get(path)).status,401)
 
     async def test_bootstrap_does_not_download_inventory_and_pages_pass_800_rows(self):

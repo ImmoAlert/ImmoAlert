@@ -41,13 +41,13 @@ class AdminAccessTests(unittest.IsolatedAsyncioTestCase):
     async def update(self,identifier,operation,value=None):
         return await self.client.post(f"/api/admin/accounts/{identifier}",json={"operation":operation,"value":value},headers={"Origin":self.origin})
 
-    async def test_only_admin_can_provision_and_no_public_registration(self):
+    async def test_only_admin_can_provision_accounts(self):
         response=await self.client.post("/api/admin/accounts",json={"login":"any"},headers={"Origin":self.origin})
         self.assertEqual(response.status,401)
         await self.login(99)
         self.assertEqual((await self.client.get("/api/admin/live")).status,403)
         self.assertEqual((await self.client.post("/api/admin/accounts",json={"login":"any"},headers={"Origin":self.origin})).status,403)
-        self.assertIn((await self.client.post("/api/register",json={},headers={"Origin":self.origin})).status,{404,405})
+        self.assertEqual((await self.client.post("/api/register",json={},headers={"Origin":self.origin})).status,400)
 
     async def test_password_account_without_telegram_keeps_filters_favorites_and_premium(self):
         await self.login()

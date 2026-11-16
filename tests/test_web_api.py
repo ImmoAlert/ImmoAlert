@@ -73,10 +73,11 @@ class SelfHostedWebTests(unittest.IsolatedAsyncioTestCase):
     async def test_anonymous_inventory_and_mutations_are_private(self):
         response = await self.client.get("/api/state")
         data = await response.json()
-        self.assertIsNone(data["snapshot"])
+        self.assertTrue(data["public"])
         self.assertIsNone(data["account"])
         self.assertEqual((await self.post("source",{"source":"pap","enabled":False})).status,401)
-        self.assertEqual((await self.client.get(f"/api/listings/{self.item.id}")).status,401)
+        self.assertEqual((await self.client.get(f"/api/listings/{self.item.id}")).status,200)
+        self.assertEqual((await self.client.get("/api/inventory?favorites=1")).status,401)
 
     async def test_full_detail_is_authenticated_and_not_truncated(self):
         await self.login(99)

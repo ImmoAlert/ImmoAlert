@@ -69,7 +69,7 @@ def _revoke(session,user,keep_session_id=None):
 def account_data(account,user):
     return {"id":account.id,"user_id":user.id,"login":account.login,"username":user.username,
         "telegram_id":user.telegram_id,"is_admin":account.is_admin or user.telegram_id in settings.admin_telegram_ids,
-        "enabled":account.enabled,"is_premium":user.is_premium,
+        "enabled":account.enabled,"is_premium":user.is_premium,"self_registered":bool(account.self_registered),"two_factor":bool(account.totp_enabled),
         "created_at":account.created_at.isoformat()+"Z","last_login_at":account.last_login_at.isoformat()+"Z" if account.last_login_at else None}
 
 
@@ -110,8 +110,71 @@ def create_account(actor_user_id,login,*,premium=False,admin=False,target_user_i
         raise ValueError("Cet identifiant ou ce profil possède déjà un accès.") from None
 
 
-def authenticate(login,password,previous_token=""):
+class OtpRequired(Exception):
+    """The password is right, but the account needs its second factor."""
+
+
+_COMMON_PASSWORDS={"password","motdepasse","123456789","1234567890","azertyuiop","qwertyuiop","immoalert"}
+
+
+def validate_password(password,login=""):
+    if not isinstance(password,str) or not 10<=len(password)<=128:
+        raise ValueError("Le mot de passe doit contenir de 10 à 128 caractères.")
+    lowered=password.lower()
+    if lowered==login or lowered in _COMMON_PASSWORDS or len(set(password))<4:
+        raise ValueError("Ce mot de passe est trop prévisible. Choisissez-en un autre.")
+
+
+def _new_session(session,user,account,previous_token=""):
     from database.web_repo import session_id
+    old=session.get(m.WebSession,session_id(previous_token)) if session_id(previous_token) else None
+    if old:
+        session.delete(old)
+    token=secrets.token_hex(32)
+    now=datetime.utcnow()
+    row=m.WebSession(id=session_id(token),user_id=user.id,telegram_id=user.telegram_id,web_account_id=account.id,expires_at=now+timedelta(days=settings.web_session_days),last_seen_at=now)
+    session.add(row);account.last_login_at=now;session.flush()
+    return token,identity(session,row)
+
+
+def register_account(login,password):
+    """Self-service sign-up: the member chooses the password; no privilege is granted."""
+    if not settings.web_public_registration:
+        raise PermissionError("Les inscriptions sont fermées.")
+    login=str(login or "").strip().lower()
+    if not _LOGIN.fullmatch(login):
+        raise ValueError("L’identifiant doit contenir 3 à 40 caractères : lettres, chiffres, point, tiret ou soulignement.")
+    validate_password(password,login)
+    encoded=hash_password(password)
+    try:
+        with _lock,repo.session_scope() as session:
+            if session.scalar(select(m.WebAccount.id).where(m.WebAccount.login==login)):
+                raise ValueError("Cet identifiant existe déjà.")
+            user=m.User(username=login,telegram_id=None,is_premium=False)
+            session.add(user);session.flush()
+            account=m.WebAccount(user_id=user.id,login=login,password_hash=encoded,is_admin=False,enabled=True,self_registered=True)
+            session.add(account);session.flush()
+            return _new_session(session,user,account)
+    except IntegrityError:
+        raise ValueError("Cet identifiant existe déjà.") from None
+
+
+def change_password(user_id,current,new,keep_session_id=None):
+    with _lock,repo.session_scope() as session:
+        account=session.scalar(select(m.WebAccount).where(m.WebAccount.user_id==user_id))
+        if not account:
+            raise ValueError("Ce profil n’a pas de mot de passe.")
+        if not isinstance(current,str) or not verify_password(current,account.password_hash):
+            raise ValueError("Le mot de passe actuel est incorrect.")
+        validate_password(new,account.login)
+        if new==current:
+            raise ValueError("Le nouveau mot de passe doit être différent.")
+        account.password_hash=hash_password(new)
+        _revoke(session,session.get(m.User,user_id),keep_session_id)
+        return account.login
+
+
+def authenticate(login,password,previous_token="",otp=None):
     login=str(login or "").strip().lower()
     if not isinstance(password,str) or not 1<=len(password)<=256:
         return None
@@ -121,16 +184,17 @@ def authenticate(login,password,previous_token=""):
         valid=verify_password(password,encoded)
         if not account or not valid or not account.enabled:
             return None
+        if account.totp_enabled:
+            from services import two_factor
+            if not otp:
+                raise OtpRequired()
+            if not two_factor.check_login(account,otp):
+                session.commit()
+                return None
         user=session.get(m.User,account.user_id)
         if not user:
             return None
-        old=session.get(m.WebSession,session_id(previous_token)) if session_id(previous_token) else None
-        if old:
-            session.delete(old)
-        token=secrets.token_hex(32)
-        row=m.WebSession(id=session_id(token),user_id=user.id,telegram_id=user.telegram_id,web_account_id=account.id,expires_at=datetime.utcnow()+timedelta(days=30))
-        session.add(row);account.last_login_at=datetime.utcnow();session.flush()
-        return token,identity(session,row)
+        return _new_session(session,user,account,previous_token)
 
 
 def update_account(actor_user_id,identifier,operation,value=None):

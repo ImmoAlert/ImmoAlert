@@ -47,21 +47,22 @@ if ($routeParts === false || isset($routeParts['scheme']) || isset($routeParts['
     fail_request(404, 'Route inconnue.');
 }
 $path = $routeParts['path'] ?? '';
-$read = preg_match('~^/api/(?:state|bootstrap|inventory|tracking|search-counts|comparison|preferences|notifications|health|admin/(?:live|providers|reports|performance)|listings/[1-9][0-9]{0,9}(?:/(?:note|prices|updates|area))?)$~D', $path) === 1;
-$write = preg_match('~^/api/(?:login|logout|action|preferences|notifications|performance|listings/[1-9][0-9]{0,9}/note|admin/accounts(?:/[1-9][0-9]{0,9})?|admin/(?:providers|reports)|admin/sources/(?:leboncoin|seloger|pap|paruvendu|entreparticuliers|logicimmo|rentola|ouestfranceimmo)/check)$~D', $path) === 1;
+$read = preg_match('~^/api/(?:state|bootstrap|inventory|tracking|search-counts|comparison|preferences|notifications|health|admin/(?:live|providers|reports|performance)|listings/[1-9][0-9]{0,9}(?:/(?:note|prices|updates|area|events|visit\.ics))?|calendar\.ics|shares|push|channels|shared/[A-Za-z0-9_-]{20,80}|admin/audit)$~D', $path) === 1;
+$write = preg_match('~^/api/(?:register|account/(?:password|2fa-start|2fa-confirm|2fa-disable)|shares|push|listings/[1-9][0-9]{0,9}/commute|login|logout|action|preferences|notifications|performance|listings/[1-9][0-9]{0,9}/note|admin/accounts(?:/[1-9][0-9]{0,9})?|admin/(?:providers|reports)|admin/sources/(?:leboncoin|seloger|pap|paruvendu|entreparticuliers|logicimmo|rentola|ouestfranceimmo)/check)$~D', $path) === 1;
 $query = [];
 parse_str($routeParts['query'] ?? '', $query);
 $allowedQuery = $path === '/api/tracking' ? ['q', 'stage', 'scope', 'upcoming', 'sort', 'page', 'limit'] : ($path === '/api/inventory' ? ['q', 'source', 'budget', 'surface', 'rooms', 'filter_id', 'favorites', 'sort', 'page', 'limit'] :
-    ($path === '/api/comparison' ? ['ids'] : (str_ends_with($path, '/prices') ? ['before', 'limit'] : ($path === '/api/notifications' ? ['before'] : []))));
+    ($path === '/api/comparison' ? ['ids', 'score'] : (str_ends_with($path, '/prices') ? ['before', 'limit'] : ($path === '/api/notifications' ? ['before'] : []))));
 foreach ($query as $key => $value) {
     if (!in_array($key, $allowedQuery, true) || !is_string($value) || strlen($value) > 500) {
         fail_request(400, 'Paramètres invalides.');
     }
 }
-if (!(($method === 'GET' && $read) || ($method === 'POST' && $write))) {
+$delete = preg_match('~^/api/(?:shares/[1-9][0-9]{0,9}|push)$~D', $path) === 1;
+if (!(($method === 'GET' && $read) || ($method === 'POST' && $write) || ($method === 'DELETE' && $delete))) {
     fail_request(404, 'Route inconnue.');
 }
-if ($method === 'POST' && ($_SERVER['HTTP_ORIGIN'] ?? '') !== $public) {
+if ($method !== 'GET' && ($_SERVER['HTTP_ORIGIN'] ?? '') !== $public) {
     fail_request(403, 'Origine refusée.');
 }
 if ((int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 65536) {
@@ -103,7 +104,7 @@ curl_setopt_array($handle, [
         return strlen($line);
     },
 ]);
-if ($method === 'POST') {
+if ($method !== 'GET') {
     curl_setopt($handle, CURLOPT_POSTFIELDS, $body);
 }
 $response = curl_exec($handle);
@@ -113,11 +114,18 @@ curl_close($handle);
 if ($failed || $response === false || $status < 200 || ($status >= 300 && $status < 400) || $status > 599) {
     fail_request(502, 'Le backend est momentanément inaccessible. Réessayez dans quelques instants.');
 }
-json_decode($response);
-if (json_last_error() !== JSON_ERROR_NONE) {
+$calendar = str_ends_with($path, '.ics') && $status === 200;
+if (!$calendar) {
+    json_decode($response);
+}
+if (!$calendar && json_last_error() !== JSON_ERROR_NONE) {
     fail_request(502, 'Réponse inattendue du backend.');
 }
 http_response_code($status);
+if ($calendar) {
+    header('Content-Type: text/calendar; charset=utf-8');
+    header('Content-Disposition: attachment; filename="visites-immoalert.ics"');
+}
 foreach ($cookies as $value) {
     header('Set-Cookie: ' . $value, false);
 }
