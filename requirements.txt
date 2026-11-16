@@ -2,7 +2,7 @@ aiogram==3.4.1
 APScheduler==3.10.4
 SQLAlchemy==2.0.29
 psycopg2-binary==2.9.9
-requests==2.31.0
+requests==2.34.2
 beautifulsoup4==4.12.3
 lxml==6.1.1
 fake-useragent==1.5.1
