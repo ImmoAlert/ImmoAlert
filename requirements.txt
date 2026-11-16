@@ -14,7 +14,7 @@ orjson==3.11.8
 cachetools==5.3.3
 geopy==2.4.1
 selenium==4.25.0
-webdriver-manager==4.0.2
+webdriver-manager==4.1.2
 scrapling[fetchers]==0.5
 cryptography==50.0.2
 pywebpush==2.5.0
